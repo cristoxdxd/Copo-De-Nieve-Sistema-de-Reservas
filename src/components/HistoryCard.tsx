@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { deleteAvailability } from "../services/deleteAvailability";
 import { getOneBooking } from "../services/getOneBooking";
+import DatePicker from "react-datepicker";
 import { updateBookingDates } from "../services/updateBookingDates";
 
 interface HistoryCardProps {
@@ -16,20 +17,22 @@ interface HistoryCardProps {
   availability: Availability;
 }
 
+const today = new Date();
+today.setDate(today.getDate() + 1);
+
 export const HistoryCard: React.FC<HistoryCardProps> = ({
   booking,
   availability,
 }) => {
   const id = availability._id;
-  const [bookingDetails, setBookingDetails] = useState<Booking | undefined>(
-    undefined
-  );
+  const [bookingDetails, setBookingDetails] = useState<Booking>({} as Booking);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalopen] = useState(false);
   const updateModalRef = useRef<HTMLDivElement>(null);
   const deleteModalRef = useRef<HTMLDivElement>(null);
   const startDate = new Date(availability.start_date);
   const endDate = new Date(availability.end_date);
+  
 
   const dateRange = endDate.getTime() - startDate.getTime();
   const days = dateRange / (1000 * 60 * 60 * 24);
@@ -38,6 +41,13 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
 
   const [checkInDate, setCheckInDate] = useState(availability.start_date);
   const [checkOutDate, setCheckOutDate] = useState(availability.end_date);
+
+  const [arrivalDate, setArrivalDate] = useState<Date | undefined>(
+    checkInDate ? new Date(checkInDate) : new Date()
+  );
+  const [departureDate, setDepartureDate] = useState<Date | undefined>(
+    checkOutDate ? new Date(checkOutDate) : new Date()
+  );
 
   useEffect(() => {
     const fetchData = async () => {
@@ -80,16 +90,32 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
       }
     }
   };
+  const restrictedDates = bookingDetails.availability;
+  const dateRanges: Date[][] = [];
+  const flattenedDateRanges = dateRanges.flat();
+  const useRestrictedDates = flattenedDateRanges.map((date) => date.toString());
+  const isDateSelectableArrival = (date: Date) =>
+    !(useRestrictedDates ?? []).some(
+      (restrictedDate) =>
+        new Date(date).getDate() === new Date(restrictedDate).getDate() &&
+        new Date(date).getFullYear() ===
+          new Date(restrictedDate).getFullYear() &&
+        new Date(date).getMonth() === new Date(restrictedDate).getMonth()
+    ) &&
+    (departureDate === undefined || new Date(date) < departureDate) &&
+    new Date(date) > today;
 
-  const handleCheckInDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newCheckInDate = e.target.value;
-    setCheckInDate(newCheckInDate);
-  };
+  const isDateSelectableDeparture = (date: Date) =>
+    !(useRestrictedDates ?? []).some(
+      (restrictedDate) =>
+        new Date(date).getDate() === new Date(restrictedDate).getDate() &&
+        new Date(date).getFullYear() ===
+          new Date(restrictedDate).getFullYear() &&
+        new Date(date).getMonth() === new Date(restrictedDate).getMonth()
+    ) &&
+    (arrivalDate === undefined || new Date(date) > arrivalDate) &&
+    new Date(date) > today;
 
-  const handleCheckOutDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newCheckOutDate = e.target.value;
-    setCheckOutDate(newCheckOutDate);
-  };
 
   const openUpdateModal = () => {
     setIsUpdateModalOpen(true);
@@ -108,26 +134,110 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
   };
 
   async function update_availability() {
-    const newAvailability: AvailabilityInput = {
-      booking_id: availability.booking_id,
-      start_date: checkInDate,
-      end_date: checkOutDate,
-      user: availability.user,
-    };
-    const res = await updateAvailability(id, newAvailability);
-
-    if (res.status === 200) {
-      closeUpdateModal();
-      console.log("Availability updated");
-    } else {
-      console.log("Error updating availability");
+    try {
+      // Verificar si las fechas de llegada y salida son válidas
+      if (!checkInDate || !checkOutDate) {
+        console.log("Fechas de llegada o salida no válidas");
+        return;
+      }
+  
+      // Verificar si las fechas seleccionadas están disponibles
+      const isArrivalAvailable = isDateSelectableArrival(arrivalDate || new Date());
+      const isDepartureAvailable = isDateSelectableDeparture(departureDate || new Date());
+  
+      if (!isArrivalAvailable || !isDepartureAvailable) {
+        console.log("Fechas no disponibles");
+        return;
+      }
+  
+      // Dividir la fecha y la hora y luego unirlas nuevamente
+      const arrivalISODate = arrivalDate?.toISOString().split("T")[0] ?? "";
+      const departureISODate = departureDate?.toISOString().split("T")[0] ?? "";
+  
+      const newAvailability: AvailabilityInput = {
+        booking_id: availability.booking_id,
+        start_date: arrivalISODate || "",
+        end_date: departureISODate || "",
+        user: availability.user,
+      };
+  
+      const res = await updateAvailability(id, newAvailability);
+  
+      if (res.status === 200) {
+        closeUpdateModal();
+        console.log("Availability updated");
+      } else {
+        console.log("Error updating availability");
+      }
+    } catch (error) {
+      console.error("Error updating availability", error);
     }
   }
+  
+  
+  const updateAvailabilityAndBookingDates = async () => {
+    try {
+      if (!bookingDetails.availability) return;
+      const updatedAvailability = bookingDetails.availability
+        .filter((date: string) => date !== availability.start_date && date !== availability.end_date)
+        .concat(arrivalDate ? [arrivalDate.toISOString()] : [], departureDate ? [departureDate.toISOString()] : []);
 
-  const handleUpdatingAvailability = () => {
-    update_booking_dates();
-    update_availability();
+      const updatedBooking: Booking = {
+        ...bookingDetails,
+        availability: updatedAvailability,
+      };
+
+      const updateBookingRes = await updateBookingDates(availability.booking_id || "", updatedBooking);
+      if (updateBookingRes.status === 200) {
+        const updatedAvailabilityInput: AvailabilityInput = {
+          booking_id: availability.booking_id,
+          start_date: arrivalDate?.toISOString() || "",
+          end_date: departureDate?.toISOString() || "",
+          user: availability.user,
+        };
+        const updateAvailabilityRes = await updateAvailability(availability._id, updatedAvailabilityInput);
+        if (updateAvailabilityRes.status === 200) {
+          console.log("Availability and booking dates updated successfully");
+          setIsUpdateModalOpen(false);
+        } else {
+          console.error("Error updating availability");
+        }
+      } else {
+        console.error("Error updating booking dates");
+      }
+    } catch (error) {
+      console.error("Error updating availability and booking dates", error);
+    }
   };
+  const handleUpdatingAvailability = async () => {
+    if (!arrivalDate || !departureDate) return;
+  
+    try {
+      // Ajustar las fechas al formato ISOString para enviarlas al servidor
+      const arrivalISOString = arrivalDate.toISOString();
+      const departureISOString = departureDate.toISOString();
+  
+      // Actualizar la disponibilidad y las fechas de reserva en el servidor
+      const updatedAvailabilityInput: AvailabilityInput = {
+        booking_id: availability.booking_id,
+        start_date: arrivalISOString,
+        end_date: departureISOString,
+        user: availability.user,
+      };
+  
+      const res = await updateAvailability(id, updatedAvailabilityInput);
+  
+      if (res.status === 200) {
+        console.log("Availability updated");
+        setIsUpdateModalOpen(false); // Cerrar el modal de actualización
+      } else {
+        console.error("Error updating availability");
+      }
+    } catch (error) {
+      console.error("Error updating availability and booking dates", error);
+    }
+  };
+  
 
   async function update_booking_dates_delete() {
     if (bookingDetails && bookingDetails.availability) {
@@ -152,6 +262,7 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
   };
 
   async function delete_availability() {
+  try {
     const res = await deleteAvailability(id);
 
     if (res.status === 200) {
@@ -160,7 +271,10 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
     } else {
       console.log("Error deleting availability");
     }
+  } catch (error) {
+    console.error("Error deleting availability", error);
   }
+}
 
   const handleDeleteAvailability = () => {
     update_booking_dates_delete();
@@ -237,36 +351,31 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
               className="flex flex-wrap justify-center gap-5"
             >
               <div className="flex items-center">
-                <label
-                  htmlFor="checkInDate"
-                  className="block text-sm font-semibold text-white"
-                >
-                  Llegada
+                <label htmlFor="llegada" className="text-white  mt-6 mb-2">
+                  Llegada:
                 </label>
-                <input
-                  type="date"
-                  id="checkInDate"
-                  value={checkInDate}
-                  onChange={handleCheckInDateChange}
-                  min={new Date().toISOString().split("T")[0]}
-                  className="ml-2 block w-40 px-6 py-2 rounded-md bg-gray-800 border font-bold border-blue-500 text-sm text-white"
+                <DatePicker
+                  id="llegada"
+                  name="llegada"
                   required
+                  className="ml-2 block w-40 px-6 py-2 rounded-md bg-blue-500 border border-blue-500 text-sm text-white"
+                  selected={arrivalDate}
+                  onChange={(date) => setArrivalDate(date || undefined)}
+                  filterDate={(date) =>
+                    isDateSelectableArrival(date || new Date())
+                  }
                 />
-              </div>
-              <div className="flex items-center">
-                <label
-                  htmlFor="checkOutDate"
-                  className="block text-sm font-semibold text-white"
-                >
-                  Salida
-                </label>
-                <input
-                  type="date"
-                  id="checkOutDate"
-                  value={checkOutDate}
-                  onChange={handleCheckOutDateChange}
-                  className="ml-2 block w-40 px-6 py-2 rounded-md bg-gray-800 border font-bold border-blue-500 text-sm text-white"
+
+                <DatePicker
+                  id="salida"
+                  name="salida"
                   required
+                  className="ml-2 block w-40 px-6 py-2 rounded-md bg-blue-500 border border-blue-500 text-sm text-white"
+                  selected={departureDate}
+                  onChange={(date) => setDepartureDate(date || undefined)}
+                  filterDate={(date) =>
+                    isDateSelectableDeparture(date || new Date())
+                  }
                 />
               </div>
               <div className="flex bg-blue-500  hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
